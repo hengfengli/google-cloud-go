@@ -44,7 +44,7 @@ microgen() {
 
 for gencfg in $(cat $GOCLOUD_DIR/gapics.txt); do
   rm -rf artman-genfiles/*
-  artman --config "$gencfg" generate go_gapic
+  /Users/hengfeng/src/googleapis/artman-venv/bin/artman --config "$gencfg" generate go_gapic
   cp -r artman-genfiles/gapi-*/cloud.google.com/go/* $GOCLOUD_DIR
 done
 

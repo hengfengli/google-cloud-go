@@ -26,3 +26,5 @@ require (
 	google.golang.org/grpc v1.21.1
 	honnef.co/go/tools v0.0.1-2019.2.3
 )
+
+replace google.golang.org/genproto v0.0.0-20191108220845-16a3f7862a1a => /Users/hengfeng/src/go-genproto
