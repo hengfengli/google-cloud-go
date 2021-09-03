@@ -119,6 +119,15 @@ var (
 			) PRIMARY KEY (RowID)`,
 	}
 
+	singerDBPGStatements = []string{
+		`CREATE TABLE singers (
+				id INT8 NOT NULL,
+				numeric NUMERIC,
+				float8 FLOAT8,
+				PRIMARY KEY(id)
+			)`,
+	}
+
 	readDBStatements = []string{
 		`CREATE TABLE TestTable (
                     Key          STRING(MAX) NOT NULL,
@@ -3167,6 +3176,87 @@ func TestIntegration_BatchDML_Error(t *testing.T) {
 	}
 }
 
+func TestIntegration_PGNumeric(t *testing.T) {
+	skipEmulatorTest(t)
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	client, _, cleanup := prepareIntegrationTestForPG(ctx, t, DefaultSessionPoolConfig, singerDBPGStatements)
+	defer cleanup()
+
+	_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *ReadWriteTransaction) error {
+		count, err := tx.Update(ctx, Statement{
+			SQL: `INSERT INTO Singers (id, numeric, float8) VALUES ($1, $2, $3)`,
+			Params: map[string]interface{}{
+				"p1": int64(123),
+				"p2": PGNumeric{"123.456789", true},
+				"p3": float64(123.456),
+			},
+		})
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			t.Errorf("row count: got %d, want 1", count)
+		}
+
+		count, err = tx.Update(ctx, Statement{
+			SQL: `INSERT INTO Singers (id, numeric, float8) VALUES ($1, $2, $3)`,
+			Params: map[string]interface{}{
+				"p1": int64(456),
+				"p2": PGNumeric{"NaN", true},
+				"p3": float64(12345.6),
+			},
+		})
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			t.Errorf("row count: got %d, want 1", count)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	iter := client.Single().Query(ctx, Statement{SQL: "SELECT id, numeric, float8 FROM Singers"})
+	got, err := readPGSingerTable(iter)
+	if err != nil {
+		t.Fatalf("failed to read data: %v", err)
+	}
+	want := [][]interface{}{
+		{int64(123), PGNumeric{"123.456789", true}, float64(123.456)},
+		{int64(456), PGNumeric{"NaN", true}, float64(12345.6)},
+	}
+	if !testEqual(got, want) {
+		t.Errorf("\ngot %v\nwant%v", got, want)
+	}
+}
+
+func readPGSingerTable(iter *RowIterator) ([][]interface{}, error) {
+	defer iter.Stop()
+	var vals [][]interface{}
+	for {
+		row, err := iter.Next()
+		if err == iterator.Done {
+			return vals, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		var id int64
+		var numeric PGNumeric
+		var float8 float64
+		err = row.Columns(&id, &numeric, &float8)
+		if err != nil {
+			return nil, err
+		}
+		vals = append(vals, []interface{}{id, numeric, float8})
+	}
+}
+
 func TestIntegration_StartBackupOperation(t *testing.T) {
 	skipEmulatorTest(t)
 	t.Parallel()
@@ -3263,6 +3353,14 @@ func TestIntegration_DirectPathFallback(t *testing.T) {
 
 // Prepare initializes Cloud Spanner testing DB and clients.
 func prepareIntegrationTest(ctx context.Context, t *testing.T, spc SessionPoolConfig, statements []string) (*Client, string, func()) {
+	return prepareDBAndClient(ctx, t, spc, statements, adminpb.DatabaseDialect_GOOGLE_STANDARD_SQL)
+}
+
+func prepareIntegrationTestForPG(ctx context.Context, t *testing.T, spc SessionPoolConfig, statements []string) (*Client, string, func()) {
+	return prepareDBAndClient(ctx, t, spc, statements, adminpb.DatabaseDialect_POSTGRESQL)
+}
+
+func prepareDBAndClient(ctx context.Context, t *testing.T, spc SessionPoolConfig, statements []string, dbDialect adminpb.DatabaseDialect) (*Client, string, func()) {
 	if databaseAdmin == nil {
 		t.Skip("Integration tests skipped")
 	}
@@ -3275,6 +3373,7 @@ func prepareIntegrationTest(ctx context.Context, t *testing.T, spc SessionPoolCo
 		Parent:          fmt.Sprintf("projects/%v/instances/%v", testProjectID, testInstanceID),
 		CreateStatement: "CREATE DATABASE " + dbName,
 		ExtraStatements: statements,
+		DatabaseDialect: dbDialect,
 	})
 	if err != nil {
 		t.Fatalf("cannot create testing DB %v: %v", dbPath, err)
