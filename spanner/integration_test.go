@@ -3428,17 +3428,33 @@ func prepareDBAndClient(ctx context.Context, t *testing.T, spc SessionPoolConfig
 
 	dbPath := fmt.Sprintf("projects/%v/instances/%v/databases/%v", testProjectID, testInstanceID, dbName)
 	// Create database and tables.
-	op, err := databaseAdmin.CreateDatabaseWithRetry(ctx, &adminpb.CreateDatabaseRequest{
+	req := &adminpb.CreateDatabaseRequest{
 		Parent:          fmt.Sprintf("projects/%v/instances/%v", testProjectID, testInstanceID),
 		CreateStatement: "CREATE DATABASE " + dbName,
 		ExtraStatements: statements,
 		DatabaseDialect: dbDialect,
-	})
+	}
+	if dbDialect == adminpb.DatabaseDialect_POSTGRESQL {
+		req.ExtraStatements = []string{}
+	}
+	op, err := databaseAdmin.CreateDatabaseWithRetry(ctx, req)
 	if err != nil {
 		t.Fatalf("cannot create testing DB %v: %v", dbPath, err)
 	}
 	if _, err := op.Wait(ctx); err != nil {
 		t.Fatalf("cannot create testing DB %v: %v", dbPath, err)
+	}
+	if dbDialect == adminpb.DatabaseDialect_POSTGRESQL {
+		op, err := databaseAdmin.UpdateDatabaseDdl(ctx, &adminpb.UpdateDatabaseDdlRequest{
+			Database:   dbPath,
+			Statements: statements,
+		})
+		if err != nil {
+			t.Fatalf("cannot create testing table %v: %v", dbPath, err)
+		}
+		if err := op.Wait(ctx); err != nil {
+			t.Fatalf("timeout creating testing table %v: %v", dbPath, err)
+		}
 	}
 	client, err := createClient(ctx, dbPath, spc)
 	if err != nil {
