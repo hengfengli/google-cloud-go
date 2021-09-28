@@ -3372,10 +3372,11 @@ func prepareDBAndClient(ctx context.Context, t *testing.T, spc SessionPoolConfig
 	req := &adminpb.CreateDatabaseRequest{
 		Parent:          fmt.Sprintf("projects/%v/instances/%v", testProjectID, testInstanceID),
 		CreateStatement: "CREATE DATABASE " + dbName,
+		ExtraStatements: statements,
 		DatabaseDialect: dbDialect,
 	}
-	if dbDialect == adminpb.DatabaseDialect_GOOGLE_STANDARD_SQL {
-		req.ExtraStatements = statements
+	if dbDialect == adminpb.DatabaseDialect_POSTGRESQL {
+		req.ExtraStatements = []string{}
 	}
 	op, err := databaseAdmin.CreateDatabaseWithRetry(ctx, req)
 	if err != nil {
@@ -3393,7 +3394,7 @@ func prepareDBAndClient(ctx context.Context, t *testing.T, spc SessionPoolConfig
 			t.Fatalf("cannot create testing table %v: %v", dbPath, err)
 		}
 		if err := op.Wait(ctx); err != nil {
-			t.Fatalf("cannot create testing table %v: %v", dbPath, err)
+			t.Fatalf("timeout creating testing table %v: %v", dbPath, err)
 		}
 	}
 	client, err := createClient(ctx, dbPath, spc)
