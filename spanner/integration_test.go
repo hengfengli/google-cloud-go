@@ -53,14 +53,15 @@ import (
 const (
 	directPathIPV6Prefix = "[2001:4860:8040"
 	directPathIPV4Prefix = "34.126"
-
-	gcloudTestsDialect = "GCLOUD_TESTS_GOLANG_DIALECT"
 )
 
 var (
 	// testProjectID specifies the project used for testing. It can be changed
 	// by setting environment variable GCLOUD_TESTS_GOLANG_PROJECT_ID.
 	testProjectID = testutil.ProjID()
+
+	// testDialect specifies the dialect used for testing.
+	testDialect adminpb.DatabaseDialect
 
 	// spannerHost specifies the spanner API host used for testing. It can be changed
 	// by setting the environment variable GCLOUD_TESTS_GOLANG_SPANNER_HOST
@@ -122,12 +123,16 @@ var (
 	}
 
 	singerDBPGStatements = []string{
-		`CREATE TABLE singers (
-				id INT8 NOT NULL,
+		`CREATE TABLE Singers (
+				SingerId INT8 NOT NULL,
+				FirstName VARCHAR(1024),
+				LastName  VARCHAR(1024),
+				SingerInfo	BYTEA,
 				numeric NUMERIC,
 				float8 FLOAT8,
-				PRIMARY KEY(id)
+				PRIMARY KEY(SingerId)
 			)`,
+		`CREATE INDEX SingerByName ON Singers(FirstName, LastName)`,
 	}
 
 	readDBStatements = []string{
@@ -196,7 +201,6 @@ var (
 	allowDpv4Cmd     string
 
 	supportedPGTests = map[string]bool{
-		"TestIntegration_PGNumeric": true,
 		"TestIntegration_SingleUse": true,
 	}
 )
@@ -240,13 +244,13 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	cleanup := initIntegrationTests()
+	defer cleanup()
 	for _, dialect := range []adminpb.DatabaseDialect{adminpb.DatabaseDialect_GOOGLE_STANDARD_SQL, adminpb.DatabaseDialect_POSTGRESQL} {
-		os.Setenv(gcloudTestsDialect, adminpb.DatabaseDialect_name[int32(dialect)])
-		cleanup := initIntegrationTests()
+		testDialect = dialect
 		res := m.Run()
-		cleanup()
-		os.Unsetenv(gcloudTestsDialect)
 		if res != 0 {
+			cleanup()
 			os.Exit(res)
 		}
 	}
@@ -411,15 +415,11 @@ func TestIntegration_SingleUse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	dialect := os.Getenv(gcloudTestsDialect)
-	var client *Client
-	var cleanup func()
-	// Set up testing environment.
-	if dialect == adminpb.DatabaseDialect_name[int32(adminpb.DatabaseDialect_POSTGRESQL)] {
-		client, _, cleanup = prepareIntegrationTestForPG(ctx, t, DefaultSessionPoolConfig, singerDBPGStatements)
-	} else {
-		client, _, cleanup = prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, singerDBStatements)
+	statements := singerDBStatements
+	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
+		statements = singerDBPGStatements
 	}
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements)
 	defer cleanup()
 
 	writes := []struct {
@@ -448,10 +448,11 @@ func TestIntegration_SingleUse(t *testing.T) {
 
 	// Test reading rows with different timestamp bounds.
 	for i, test := range []struct {
-		name    string
-		want    [][]interface{}
-		tb      TimestampBound
-		checkTs func(time.Time) error
+		name      string
+		want      [][]interface{}
+		tb        TimestampBound
+		checkTs   func(time.Time) error
+		skipForPG bool
 	}{
 		{
 			name: "strong",
@@ -501,7 +502,10 @@ func TestIntegration_SingleUse(t *testing.T) {
 		},
 		{
 			name: "exact_staleness",
-			want: nil,
+			// PG query with exact_staleness returns error code
+			// "InvalidArgument", desc = "[ERROR] relation \"singers\" does not exist
+			skipForPG: true,
+			want:      nil,
 			// Specify a staleness which should be already before this test.
 			tb: ExactStaleness(time.Now().Sub(writes[0].ts) + timeDiff + 30*time.Second),
 			checkTs: func(ts time.Time) error {
@@ -513,16 +517,39 @@ func TestIntegration_SingleUse(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			// SingleUse.Query
+			var got [][]interface{}
 			su := client.Single().WithTimestampBound(test.tb)
-			got, err := readAll(su.Query(
-				ctx,
-				Statement{
-					"SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId IN (@id1, @id3, @id4) ORDER BY SingerId",
-					map[string]interface{}{"id1": int64(1), "id3": int64(3), "id4": int64(4)},
-				}))
-			if err != nil {
-				t.Fatalf("%d: SingleUse.Query returns error %v, want nil", i, err)
+			// SingleUse.Query
+			if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
+				if test.skipForPG {
+					t.Skip("Skipping testing of unsupported tests in Postgres dialect.")
+				}
+				// In clause not supported in PG dialect b/186271659
+				for _, id := range []int64{1, 3, 4} {
+					suRow := client.Single().WithTimestampBound(test.tb)
+					gotRow, err := readAll(suRow.Query(
+						ctx,
+						Statement{
+							fmt.Sprintf("SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId = %v", id),
+							nil,
+						}))
+					if err != nil {
+						t.Fatalf("%d: SingleUse.Query returns error %v, want nil", i, err)
+					}
+					got = append(got, gotRow...)
+					su = suRow
+				}
+			} else {
+				var err error
+				got, err = readAll(su.Query(
+					ctx,
+					Statement{
+						"SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId IN (@id1, @id3, @id4) ORDER BY SingerId",
+						map[string]interface{}{"id1": int64(1), "id3": int64(3), "id4": int64(4)},
+					}))
+				if err != nil {
+					t.Fatalf("%d: SingleUse.Query returns error %v, want nil", i, err)
+				}
 			}
 			verifyDirectPathRemoteAddress(t)
 			rts, err := su.Timestamp()
@@ -3244,7 +3271,7 @@ func TestIntegration_PGNumeric(t *testing.T) {
 
 	_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *ReadWriteTransaction) error {
 		count, err := tx.Update(ctx, Statement{
-			SQL: `INSERT INTO Singers (id, numeric, float8) VALUES ($1, $2, $3)`,
+			SQL: `INSERT INTO Singers (SingerId, numeric, float8) VALUES ($1, $2, $3)`,
 			Params: map[string]interface{}{
 				"p1": int64(123),
 				"p2": PGNumeric{"123.456789", true},
@@ -3259,7 +3286,7 @@ func TestIntegration_PGNumeric(t *testing.T) {
 		}
 
 		count, err = tx.Update(ctx, Statement{
-			SQL: `INSERT INTO Singers (id, numeric, float8) VALUES ($1, $2, $3)`,
+			SQL: `INSERT INTO Singers (SingerId, numeric, float8) VALUES ($1, $2, $3)`,
 			Params: map[string]interface{}{
 				"p1": int64(456),
 				"p2": PGNumeric{"NaN", true},
@@ -3278,7 +3305,7 @@ func TestIntegration_PGNumeric(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	iter := client.Single().Query(ctx, Statement{SQL: "SELECT id, numeric, float8 FROM Singers"})
+	iter := client.Single().Query(ctx, Statement{SQL: "SELECT SingerId, numeric, float8 FROM Singers"})
 	got, err := readPGSingerTable(iter)
 	if err != nil {
 		t.Fatalf("failed to read data: %v", err)
@@ -3412,7 +3439,7 @@ func TestIntegration_DirectPathFallback(t *testing.T) {
 
 // Prepare initializes Cloud Spanner testing DB and clients.
 func prepareIntegrationTest(ctx context.Context, t *testing.T, spc SessionPoolConfig, statements []string) (*Client, string, func()) {
-	return prepareDBAndClient(ctx, t, spc, statements, adminpb.DatabaseDialect_GOOGLE_STANDARD_SQL)
+	return prepareDBAndClient(ctx, t, spc, statements, testDialect)
 }
 
 func prepareIntegrationTestForPG(ctx context.Context, t *testing.T, spc SessionPoolConfig, statements []string) (*Client, string, func()) {
@@ -3757,8 +3784,7 @@ func skipEmulatorTest(t *testing.T) {
 }
 
 func skipUnsupportedPGTest(t *testing.T) {
-	dialect := os.Getenv(gcloudTestsDialect)
-	if dialect == adminpb.DatabaseDialect_name[int32(adminpb.DatabaseDialect_POSTGRESQL)] {
+	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
 		skipEmulatorTest(t)
 		if _, ok := supportedPGTests[t.Name()]; !ok {
 			t.Skip("Skipping testing of unsupported tests in Postgres dialect.")
