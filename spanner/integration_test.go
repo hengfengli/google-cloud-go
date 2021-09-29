@@ -53,6 +53,8 @@ import (
 const (
 	directPathIPV6Prefix = "[2001:4860:8040"
 	directPathIPV4Prefix = "34.126"
+
+	singerDBDDLStatements = "SINGER_DB__DDL_STATEMENTS"
 )
 
 var (
@@ -191,6 +193,15 @@ var (
 						Numeric		NUMERIC,
 						NumericArray	ARRAY<NUMERIC>
 					) PRIMARY KEY (RowID)`,
+	}
+
+	statements = map[adminpb.DatabaseDialect]map[string][]string{
+		adminpb.DatabaseDialect_GOOGLE_STANDARD_SQL: {
+			singerDBDDLStatements: singerDBStatements,
+		},
+		adminpb.DatabaseDialect_POSTGRESQL: {
+			singerDBDDLStatements: singerDBPGStatements,
+		},
 	}
 
 	validInstancePattern = regexp.MustCompile("^projects/(?P<project>[^/]+)/instances/(?P<instance>[^/]+)$")
@@ -411,11 +422,7 @@ func TestIntegration_SingleUse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	statements := singerDBStatements
-	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
-		statements = singerDBPGStatements
-	}
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements)
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][singerDBDDLStatements])
 	defer cleanup()
 
 	writes := []struct {
@@ -513,39 +520,23 @@ func TestIntegration_SingleUse(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			var got [][]interface{}
-			su := client.Single().WithTimestampBound(test.tb)
 			// SingleUse.Query
+			singersQuery := "SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId IN (@p1, @p2, @p3) ORDER BY SingerId"
 			if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
 				if test.skipForPG {
 					t.Skip("Skipping testing of unsupported tests in Postgres dialect.")
 				}
-				// In clause not supported in PG dialect b/186271659
-				for _, id := range []int64{1, 3, 4} {
-					suRow := client.Single().WithTimestampBound(test.tb)
-					gotRow, err := readAll(suRow.Query(
-						ctx,
-						Statement{
-							fmt.Sprintf("SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId = %v", id),
-							nil,
-						}))
-					if err != nil {
-						t.Fatalf("%d: SingleUse.Query returns error %v, want nil", i, err)
-					}
-					got = append(got, gotRow...)
-					su = suRow
-				}
-			} else {
-				var err error
-				got, err = readAll(su.Query(
-					ctx,
-					Statement{
-						"SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId IN (@id1, @id3, @id4) ORDER BY SingerId",
-						map[string]interface{}{"id1": int64(1), "id3": int64(3), "id4": int64(4)},
-					}))
-				if err != nil {
-					t.Fatalf("%d: SingleUse.Query returns error %v, want nil", i, err)
-				}
+				singersQuery = "SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId = $1 OR  SingerId = $2 OR  SingerId = $3 ORDER BY SingerId"
+			}
+			su := client.Single().WithTimestampBound(test.tb)
+			got, err := readAll(su.Query(
+				ctx,
+				Statement{
+					singersQuery,
+					map[string]interface{}{"p1": int64(1), "p2": int64(3), "p3": int64(4)},
+				}))
+			if err != nil {
+				t.Fatalf("%d: SingleUse.Query returns error %v, want nil", i, err)
 			}
 			verifyDirectPathRemoteAddress(t)
 			rts, err := su.Timestamp()
