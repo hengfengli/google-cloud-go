@@ -53,12 +53,17 @@ import (
 const (
 	directPathIPV6Prefix = "[2001:4860:8040"
 	directPathIPV4Prefix = "34.126"
+
+	singerDDLStatements = "SINGER_DDL_STATEMENTS"
 )
 
 var (
 	// testProjectID specifies the project used for testing. It can be changed
 	// by setting environment variable GCLOUD_TESTS_GOLANG_PROJECT_ID.
 	testProjectID = testutil.ProjID()
+
+	// testDialect specifies the dialect used for testing.
+	testDialect adminpb.DatabaseDialect
 
 	// spannerHost specifies the spanner API host used for testing. It can be changed
 	// by setting the environment variable GCLOUD_TESTS_GOLANG_SPANNER_HOST
@@ -120,12 +125,16 @@ var (
 	}
 
 	singerDBPGStatements = []string{
-		`CREATE TABLE singers (
-				id INT8 NOT NULL,
+		`CREATE TABLE Singers (
+				SingerId INT8 NOT NULL,
+				FirstName VARCHAR(1024),
+				LastName  VARCHAR(1024),
+				SingerInfo	BYTEA,
 				numeric NUMERIC,
 				float8 FLOAT8,
-				PRIMARY KEY(id)
+				PRIMARY KEY(SingerId)
 			)`,
+		`CREATE INDEX SingerByName ON Singers(FirstName, LastName)`,
 	}
 
 	readDBStatements = []string{
@@ -186,6 +195,15 @@ var (
 					) PRIMARY KEY (RowID)`,
 	}
 
+	statements = map[adminpb.DatabaseDialect]map[string][]string{
+		adminpb.DatabaseDialect_GOOGLE_STANDARD_SQL: {
+			singerDDLStatements: singerDBStatements,
+		},
+		adminpb.DatabaseDialect_POSTGRESQL: {
+			singerDDLStatements: singerDBPGStatements,
+		},
+	}
+
 	validInstancePattern = regexp.MustCompile("^projects/(?P<project>[^/]+)/instances/(?P<instance>[^/]+)$")
 
 	blackholeDpv6Cmd string
@@ -234,9 +252,15 @@ const (
 
 func TestMain(m *testing.M) {
 	cleanup := initIntegrationTests()
-	res := m.Run()
-	cleanup()
-	os.Exit(res)
+	defer cleanup()
+	for _, dialect := range []adminpb.DatabaseDialect{adminpb.DatabaseDialect_GOOGLE_STANDARD_SQL, adminpb.DatabaseDialect_POSTGRESQL} {
+		testDialect = dialect
+		res := m.Run()
+		if res != 0 {
+			cleanup()
+			os.Exit(res)
+		}
+	}
 }
 
 var grpcHeaderChecker = testutil.DefaultHeadersEnforcer()
@@ -330,6 +354,8 @@ func initIntegrationTests() (cleanup func()) {
 }
 
 func TestIntegration_InitSessionPool(t *testing.T) {
+	skipUnsupportedPGTest(t)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	// Set up an empty testing environment.
@@ -390,12 +416,13 @@ loop:
 
 // Test SingleUse transaction.
 func TestIntegration_SingleUse(t *testing.T) {
+	skipEmulatorTestForPG(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	// Set up testing environment.
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, singerDBStatements)
+
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][singerDDLStatements])
 	defer cleanup()
 
 	writes := []struct {
@@ -424,10 +451,11 @@ func TestIntegration_SingleUse(t *testing.T) {
 
 	// Test reading rows with different timestamp bounds.
 	for i, test := range []struct {
-		name    string
-		want    [][]interface{}
-		tb      TimestampBound
-		checkTs func(time.Time) error
+		name      string
+		want      [][]interface{}
+		tb        TimestampBound
+		checkTs   func(time.Time) error
+		skipForPG bool
 	}{
 		{
 			name: "strong",
@@ -477,7 +505,10 @@ func TestIntegration_SingleUse(t *testing.T) {
 		},
 		{
 			name: "exact_staleness",
-			want: nil,
+			// PG query with exact_staleness returns error code
+			// "InvalidArgument", desc = "[ERROR] relation \"singers\" does not exist
+			skipForPG: true,
+			want:      nil,
 			// Specify a staleness which should be already before this test.
 			tb: ExactStaleness(time.Now().Sub(writes[0].ts) + timeDiff + 30*time.Second),
 			checkTs: func(ts time.Time) error {
@@ -490,12 +521,19 @@ func TestIntegration_SingleUse(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			// SingleUse.Query
+			singersQuery := "SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId IN (@p1, @p2, @p3) ORDER BY SingerId"
+			if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
+				if test.skipForPG {
+					t.Skip("Skipping testing of unsupported tests in Postgres dialect.")
+				}
+				singersQuery = "SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId = $1 OR  SingerId = $2 OR  SingerId = $3 ORDER BY SingerId"
+			}
 			su := client.Single().WithTimestampBound(test.tb)
 			got, err := readAll(su.Query(
 				ctx,
 				Statement{
-					"SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId IN (@id1, @id3, @id4) ORDER BY SingerId",
-					map[string]interface{}{"id1": int64(1), "id3": int64(3), "id4": int64(4)},
+					singersQuery,
+					map[string]interface{}{"p1": int64(1), "p2": int64(3), "p3": int64(4)},
 				}))
 			if err != nil {
 				t.Fatalf("%d: SingleUse.Query returns error %v, want nil", i, err)
@@ -622,6 +660,7 @@ func TestIntegration_SingleUse(t *testing.T) {
 // Test custom query options provided on query-level configuration.
 func TestIntegration_SingleUse_WithQueryOptions(t *testing.T) {
 	skipEmulatorTest(t)
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -669,6 +708,7 @@ func TestIntegration_SingleUse_WithQueryOptions(t *testing.T) {
 }
 
 func TestIntegration_SingleUse_ReadingWithLimit(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -712,6 +752,7 @@ func TestIntegration_SingleUse_ReadingWithLimit(t *testing.T) {
 // Test ReadOnlyTransaction. The testsuite is mostly like SingleUse, except it
 // also tests for a single timestamp across multiple reads.
 func TestIntegration_ReadOnlyTransaction(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctxTimeout := 5 * time.Minute
@@ -925,6 +966,7 @@ func TestIntegration_ReadOnlyTransaction(t *testing.T) {
 // Test ReadOnlyTransaction with different timestamp bound when there's an
 // update at the same time.
 func TestIntegration_UpdateDuringRead(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -957,6 +999,7 @@ func TestIntegration_UpdateDuringRead(t *testing.T) {
 
 // Test ReadWriteTransaction.
 func TestIntegration_ReadWriteTransaction(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	// Give a longer deadline because of transaction backoffs.
@@ -1055,8 +1098,9 @@ func TestIntegration_ReadWriteTransaction(t *testing.T) {
 
 // Test ReadWriteTransactionWithOptions.
 func TestIntegration_ReadWriteTransactionWithOptions(t *testing.T) {
-	t.Parallel()
 	skipEmulatorTest(t)
+	skipUnsupportedPGTest(t)
+	t.Parallel()
 
 	// Give a longer deadline because of transaction backoffs.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -1124,8 +1168,9 @@ func TestIntegration_ReadWriteTransactionWithOptions(t *testing.T) {
 }
 
 func TestIntegration_ReadWriteTransaction_StatementBased(t *testing.T) {
-	t.Parallel()
 	skipEmulatorTest(t)
+	skipUnsupportedPGTest(t)
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -1219,6 +1264,7 @@ func TestIntegration_ReadWriteTransaction_StatementBased(t *testing.T) {
 func TestIntegration_ReadWriteTransaction_StatementBasedWithOptions(t *testing.T) {
 	t.Parallel()
 	skipEmulatorTest(t)
+	skipUnsupportedPGTest(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -1303,6 +1349,7 @@ func TestIntegration_ReadWriteTransaction_StatementBasedWithOptions(t *testing.T
 }
 
 func TestIntegration_Reads(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -1391,6 +1438,7 @@ func TestIntegration_Reads(t *testing.T) {
 }
 
 func TestIntegration_EarlyTimestamp(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	// Test that we can get the timestamp from a read-only transaction as
@@ -1439,6 +1487,7 @@ func TestIntegration_EarlyTimestamp(t *testing.T) {
 }
 
 func TestIntegration_NestedTransaction(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	// You cannot use a transaction from inside a read-write transaction.
@@ -1471,6 +1520,7 @@ func TestIntegration_NestedTransaction(t *testing.T) {
 }
 
 func TestIntegration_CreateDBRetry(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	if databaseAdmin == nil {
@@ -1515,6 +1565,7 @@ func TestIntegration_CreateDBRetry(t *testing.T) {
 
 // Test client recovery on database recreation.
 func TestIntegration_DbRemovalRecovery(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -1570,6 +1621,7 @@ func TestIntegration_DbRemovalRecovery(t *testing.T) {
 
 // Test encoding/decoding non-struct Cloud Spanner types.
 func TestIntegration_BasicTypes(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -1857,6 +1909,7 @@ func TestIntegration_BasicTypes(t *testing.T) {
 
 // Test decoding Cloud Spanner STRUCT type.
 func TestIntegration_StructTypes(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -1944,6 +1997,7 @@ func TestIntegration_StructTypes(t *testing.T) {
 }
 
 func TestIntegration_StructParametersUnsupported(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	skipEmulatorTest(t)
 	t.Parallel()
 
@@ -1990,6 +2044,7 @@ func TestIntegration_StructParametersUnsupported(t *testing.T) {
 
 // Test queries of the form "SELECT expr".
 func TestIntegration_QueryExpressions(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -2046,6 +2101,7 @@ func TestIntegration_QueryExpressions(t *testing.T) {
 }
 
 func TestIntegration_QueryStats(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	skipEmulatorTest(t)
 	t.Parallel()
 
@@ -2091,6 +2147,7 @@ func TestIntegration_QueryStats(t *testing.T) {
 }
 
 func TestIntegration_InvalidDatabase(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	if databaseAdmin == nil {
@@ -2110,6 +2167,7 @@ func TestIntegration_InvalidDatabase(t *testing.T) {
 }
 
 func TestIntegration_ReadErrors(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -2172,6 +2230,7 @@ func TestIntegration_ReadErrors(t *testing.T) {
 // Test TransactionRunner. Test that transactions are aborted and retried as
 // expected.
 func TestIntegration_TransactionRunner(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	skipEmulatorTest(t)
 	t.Parallel()
 
@@ -2314,6 +2373,7 @@ func TestIntegration_TransactionRunner(t *testing.T) {
 // serialize and deserialize both transaction and partition to be used in
 // execution on another client, and compare results.
 func TestIntegration_BatchQuery(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	// Set up testing environment.
@@ -2400,6 +2460,7 @@ func TestIntegration_BatchQuery(t *testing.T) {
 
 // Test PartitionRead of BatchReadOnlyTransaction, similar to TestBatchQuery
 func TestIntegration_BatchRead(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	// Set up testing environment.
@@ -2485,6 +2546,7 @@ func TestIntegration_BatchRead(t *testing.T) {
 
 // Test normal txReadEnv method on BatchReadOnlyTransaction.
 func TestIntegration_BROTNormal(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	// Set up testing environment and create txn.
@@ -2521,6 +2583,7 @@ func TestIntegration_BROTNormal(t *testing.T) {
 }
 
 func TestIntegration_CommitTimestamp(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -2591,6 +2654,7 @@ func TestIntegration_CommitTimestamp(t *testing.T) {
 }
 
 func TestIntegration_DML(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -2762,6 +2826,7 @@ func TestIntegration_DML(t *testing.T) {
 }
 
 func TestIntegration_StructParametersBind(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -2932,6 +2997,7 @@ func TestIntegration_StructParametersBind(t *testing.T) {
 }
 
 func TestIntegration_PDML(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -2986,6 +3052,7 @@ func TestIntegration_PDML(t *testing.T) {
 }
 
 func TestIntegration_BatchDML(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -3039,6 +3106,7 @@ func TestIntegration_BatchDML(t *testing.T) {
 }
 
 func TestIntegration_BatchDML_NoStatements(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -3063,6 +3131,7 @@ func TestIntegration_BatchDML_NoStatements(t *testing.T) {
 }
 
 func TestIntegration_BatchDML_TwoStatements(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -3112,6 +3181,7 @@ func TestIntegration_BatchDML_TwoStatements(t *testing.T) {
 }
 
 func TestIntegration_BatchDML_Error(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -3177,6 +3247,7 @@ func TestIntegration_BatchDML_Error(t *testing.T) {
 }
 
 func TestIntegration_PGNumeric(t *testing.T) {
+	onlyRunForPGTest(t)
 	skipEmulatorTest(t)
 	t.Parallel()
 
@@ -3187,7 +3258,7 @@ func TestIntegration_PGNumeric(t *testing.T) {
 
 	_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *ReadWriteTransaction) error {
 		count, err := tx.Update(ctx, Statement{
-			SQL: `INSERT INTO Singers (id, numeric, float8) VALUES ($1, $2, $3)`,
+			SQL: `INSERT INTO Singers (SingerId, numeric, float8) VALUES ($1, $2, $3)`,
 			Params: map[string]interface{}{
 				"p1": int64(123),
 				"p2": PGNumeric{"123.456789", true},
@@ -3202,7 +3273,7 @@ func TestIntegration_PGNumeric(t *testing.T) {
 		}
 
 		count, err = tx.Update(ctx, Statement{
-			SQL: `INSERT INTO Singers (id, numeric, float8) VALUES ($1, $2, $3)`,
+			SQL: `INSERT INTO Singers (SingerId, numeric, float8) VALUES ($1, $2, $3)`,
 			Params: map[string]interface{}{
 				"p1": int64(456),
 				"p2": PGNumeric{"NaN", true},
@@ -3221,7 +3292,7 @@ func TestIntegration_PGNumeric(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	iter := client.Single().Query(ctx, Statement{SQL: "SELECT id, numeric, float8 FROM Singers"})
+	iter := client.Single().Query(ctx, Statement{SQL: "SELECT SingerId, numeric, float8 FROM Singers"})
 	got, err := readPGSingerTable(iter)
 	if err != nil {
 		t.Fatalf("failed to read data: %v", err)
@@ -3258,6 +3329,7 @@ func readPGSingerTable(iter *RowIterator) ([][]interface{}, error) {
 }
 
 func TestIntegration_StartBackupOperation(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	skipEmulatorTest(t)
 	t.Parallel()
 
@@ -3307,6 +3379,7 @@ func TestIntegration_StartBackupOperation(t *testing.T) {
 
 // TestIntegration_DirectPathFallback tests the CFE fallback when the directpath net is blackholed.
 func TestIntegration_DirectPathFallback(t *testing.T) {
+	skipUnsupportedPGTest(t)
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -3353,7 +3426,7 @@ func TestIntegration_DirectPathFallback(t *testing.T) {
 
 // Prepare initializes Cloud Spanner testing DB and clients.
 func prepareIntegrationTest(ctx context.Context, t *testing.T, spc SessionPoolConfig, statements []string) (*Client, string, func()) {
-	return prepareDBAndClient(ctx, t, spc, statements, adminpb.DatabaseDialect_GOOGLE_STANDARD_SQL)
+	return prepareDBAndClient(ctx, t, spc, statements, testDialect)
 }
 
 func prepareIntegrationTestForPG(ctx context.Context, t *testing.T, spc SessionPoolConfig, statements []string) (*Client, string, func()) {
@@ -3694,6 +3767,24 @@ func isEmulatorEnvSet() bool {
 func skipEmulatorTest(t *testing.T) {
 	if isEmulatorEnvSet() {
 		t.Skip("Skipping testing against the emulator.")
+	}
+}
+
+func skipEmulatorTestForPG(t *testing.T) {
+	if isEmulatorEnvSet() && testDialect == adminpb.DatabaseDialect_POSTGRESQL {
+		t.Skip("Skipping PG testing against the emulator.")
+	}
+}
+
+func skipUnsupportedPGTest(t *testing.T) {
+	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
+		t.Skip("Skipping testing of unsupported tests in Postgres dialect.")
+	}
+}
+
+func onlyRunForPGTest(t *testing.T) {
+	if testDialect != adminpb.DatabaseDialect_POSTGRESQL {
+		t.Skip("Skipping tests supported only in Postgres dialect.")
 	}
 }
 
