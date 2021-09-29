@@ -54,7 +54,7 @@ const (
 	directPathIPV6Prefix = "[2001:4860:8040"
 	directPathIPV4Prefix = "34.126"
 
-	singerDBDDLStatements = "SINGER_DB__DDL_STATEMENTS"
+	singerDDLStatements = "SINGER_DDL_STATEMENTS"
 )
 
 var (
@@ -197,10 +197,10 @@ var (
 
 	statements = map[adminpb.DatabaseDialect]map[string][]string{
 		adminpb.DatabaseDialect_GOOGLE_STANDARD_SQL: {
-			singerDBDDLStatements: singerDBStatements,
+			singerDDLStatements: singerDBStatements,
 		},
 		adminpb.DatabaseDialect_POSTGRESQL: {
-			singerDBDDLStatements: singerDBPGStatements,
+			singerDDLStatements: singerDBPGStatements,
 		},
 	}
 
@@ -422,7 +422,7 @@ func TestIntegration_SingleUse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][singerDBDDLStatements])
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][singerDDLStatements])
 	defer cleanup()
 
 	writes := []struct {
