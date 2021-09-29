@@ -3256,7 +3256,7 @@ func TestIntegration_BatchDML_Error(t *testing.T) {
 }
 
 func TestIntegration_PGNumeric(t *testing.T) {
-	skipUnsupportedPGTest(t)
+	onlyRunForPGTest(t)
 	skipEmulatorTest(t)
 	t.Parallel()
 
@@ -3788,6 +3788,12 @@ func skipEmulatorTestForPG(t *testing.T) {
 func skipUnsupportedPGTest(t *testing.T) {
 	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
 		t.Skip("Skipping testing of unsupported tests in Postgres dialect.")
+	}
+}
+
+func onlyRunForPGTest(t *testing.T) {
+	if testDialect != adminpb.DatabaseDialect_POSTGRESQL {
+		t.Skip("Skipping tests supported only in Postgres dialect.")
 	}
 }
 
