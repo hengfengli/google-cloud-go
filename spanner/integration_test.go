@@ -199,10 +199,6 @@ var (
 	blackholeDpv4Cmd string
 	allowDpv6Cmd     string
 	allowDpv4Cmd     string
-
-	supportedPGTests = map[string]bool{
-		"TestIntegration_SingleUse": true,
-	}
 )
 
 func init() {
@@ -409,7 +405,7 @@ loop:
 
 // Test SingleUse transaction.
 func TestIntegration_SingleUse(t *testing.T) {
-	skipUnsupportedPGTest(t)
+	skipEmulatorTestForPG(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -3783,12 +3779,15 @@ func skipEmulatorTest(t *testing.T) {
 	}
 }
 
+func skipEmulatorTestForPG(t *testing.T) {
+	if isEmulatorEnvSet() && testDialect == adminpb.DatabaseDialect_POSTGRESQL {
+		t.Skip("Skipping PG testing against the emulator.")
+	}
+}
+
 func skipUnsupportedPGTest(t *testing.T) {
 	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
-		skipEmulatorTest(t)
-		if _, ok := supportedPGTests[t.Name()]; !ok {
-			t.Skip("Skipping testing of unsupported tests in Postgres dialect.")
-		}
+		t.Skip("Skipping testing of unsupported tests in Postgres dialect.")
 	}
 }
 
