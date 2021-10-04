@@ -55,6 +55,9 @@ const (
 	directPathIPV4Prefix = "34.126"
 
 	singerDDLStatements = "SINGER_DDL_STATEMENTS"
+	simpleDDLStatements = "SIMPLE_DDL_STATEMENTS"
+	readDDLStatements   = "READ_DDL_STATEMENTS"
+	backupDDLStatements = "BACKUP_DDL_STATEMENTS"
 )
 
 var (
@@ -135,6 +138,13 @@ var (
 				PRIMARY KEY(SingerId)
 			)`,
 		`CREATE INDEX SingerByName ON Singers(FirstName, LastName)`,
+		`CREATE TABLE Accounts (
+				AccountId BIGINT NOT NULL,
+				Nickname  VARCHAR(100),
+				Balance   BIGINT NOT NULL,
+				PRIMARY KEY(AccountId)
+			)`,
+		`CREATE INDEX AccountByNickname ON Accounts(Nickname)`,
 	}
 
 	readDBStatements = []string{
@@ -146,11 +156,27 @@ var (
 		`CREATE INDEX TestTableByValueDesc ON TestTable(StringValue DESC)`,
 	}
 
+	readDBPGStatements = []string{
+		`CREATE TABLE TestTable (
+                    Key          VARCHAR PRIMARY KEY,
+                    StringValue  VARCHAR
+            )`,
+		`CREATE INDEX TestTableByValue ON TestTable(StringValue)`,
+		`CREATE INDEX TestTableByValueDesc ON TestTable(StringValue DESC)`,
+	}
+
 	simpleDBStatements = []string{
 		`CREATE TABLE test (
 				a	STRING(1024),
 				b	STRING(1024),
 			) PRIMARY KEY (a)`,
+	}
+
+	simpleDBPGStatements = []string{
+		`CREATE TABLE test (
+				a	VARCHAR(1024) PRIMARY KEY,
+				b	VARCHAR(1024)
+			)`,
 	}
 	simpleDBTableColumns = []string{"a", "b"}
 
@@ -160,7 +186,7 @@ var (
 		    Ts   TIMESTAMP OPTIONS (allow_commit_timestamp = true),
 	    ) PRIMARY KEY (Key)`,
 	}
-	backuDBStatements = []string{
+	backupDBStatements = []string{
 		`CREATE TABLE Singers (
 						SingerId	INT64 NOT NULL,
 						FirstName	STRING(1024),
@@ -195,12 +221,43 @@ var (
 					) PRIMARY KEY (RowID)`,
 	}
 
+	backupDBPGStatements = []string{
+		`CREATE TABLE Singers (
+						SingerId	BIGINT PRIMARY KEY,
+						FirstName	VARCHAR(1024),
+						LastName	VARCHAR(1024),
+						SingerInfo	BYTEA
+					)`,
+		`CREATE INDEX SingerByName ON Singers(FirstName, LastName)`,
+		`CREATE TABLE Accounts (
+						AccountId	BIGINT PRIMARY KEY,
+						Nickname	VARCHAR(100),
+						Balance		BIGINT NOT NULL
+					)`,
+		`CREATE INDEX AccountByNickname ON Accounts(Nickname)`,
+		`CREATE TABLE Types (
+						RowID		BIGINT PRIMARY KEY,
+						String		VARCHAR,
+						Bytes		BYTEA,
+						Int64a		BIGINT,
+						Bool		BOOL,
+						Float64		DOUBLE PRECISION,
+						Numeric		NUMERIC
+					)`,
+	}
+
 	statements = map[adminpb.DatabaseDialect]map[string][]string{
 		adminpb.DatabaseDialect_GOOGLE_STANDARD_SQL: {
 			singerDDLStatements: singerDBStatements,
+			simpleDDLStatements: simpleDBStatements,
+			readDDLStatements:   readDBStatements,
+			backupDDLStatements: backupDBStatements,
 		},
 		adminpb.DatabaseDialect_POSTGRESQL: {
 			singerDDLStatements: singerDBPGStatements,
+			simpleDDLStatements: simpleDBPGStatements,
+			readDDLStatements:   readDBPGStatements,
+			backupDDLStatements: backupDBPGStatements,
 		},
 	}
 
@@ -254,6 +311,10 @@ func TestMain(m *testing.M) {
 	cleanup := initIntegrationTests()
 	defer cleanup()
 	for _, dialect := range []adminpb.DatabaseDialect{adminpb.DatabaseDialect_GOOGLE_STANDARD_SQL, adminpb.DatabaseDialect_POSTGRESQL} {
+		if isEmulatorEnvSet() && dialect == adminpb.DatabaseDialect_POSTGRESQL {
+			// PG tests are not supported in emulator
+			continue
+		}
 		testDialect = dialect
 		res := m.Run()
 		if res != 0 {
@@ -2101,13 +2162,12 @@ func TestIntegration_QueryExpressions(t *testing.T) {
 }
 
 func TestIntegration_QueryStats(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	skipEmulatorTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, singerDBStatements)
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][singerDDLStatements])
 	defer cleanup()
 
 	accounts := []*Mutation{
@@ -2147,7 +2207,6 @@ func TestIntegration_QueryStats(t *testing.T) {
 }
 
 func TestIntegration_InvalidDatabase(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	if databaseAdmin == nil {
@@ -2167,12 +2226,11 @@ func TestIntegration_InvalidDatabase(t *testing.T) {
 }
 
 func TestIntegration_ReadErrors(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, readDBStatements)
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][readDDLStatements])
 	defer cleanup()
 
 	var ms []*Mutation
@@ -2200,7 +2258,12 @@ func TestIntegration_ReadErrors(t *testing.T) {
 	iter := client.Single().Query(ctx, Statement{SQL: "SELECT Apples AND Oranges"})
 	defer iter.Stop()
 	_, err = iter.Next()
-	if msg, ok := matchError(err, codes.InvalidArgument, "unrecognized name"); !ok {
+
+	errorMessage := "unrecognized name"
+	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
+		errorMessage = "does not exist"
+	}
+	if msg, ok := matchError(err, codes.InvalidArgument, errorMessage); !ok {
 		t.Error(msg)
 	}
 
@@ -2230,13 +2293,11 @@ func TestIntegration_ReadErrors(t *testing.T) {
 // Test TransactionRunner. Test that transactions are aborted and retried as
 // expected.
 func TestIntegration_TransactionRunner(t *testing.T) {
-	skipUnsupportedPGTest(t)
-	skipEmulatorTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, singerDBStatements)
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][singerDDLStatements])
 	defer cleanup()
 
 	// Test 1: User error should abort the transaction.
@@ -2373,7 +2434,6 @@ func TestIntegration_TransactionRunner(t *testing.T) {
 // serialize and deserialize both transaction and partition to be used in
 // execution on another client, and compare results.
 func TestIntegration_BatchQuery(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	// Set up testing environment.
@@ -2383,7 +2443,7 @@ func TestIntegration_BatchQuery(t *testing.T) {
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, dbPath, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, simpleDBStatements)
+	client, dbPath, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][simpleDDLStatements])
 	defer cleanup()
 
 	if err = populate(ctx, client); err != nil {
@@ -2460,7 +2520,6 @@ func TestIntegration_BatchQuery(t *testing.T) {
 
 // Test PartitionRead of BatchReadOnlyTransaction, similar to TestBatchQuery
 func TestIntegration_BatchRead(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	// Set up testing environment.
@@ -2470,7 +2529,7 @@ func TestIntegration_BatchRead(t *testing.T) {
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, dbPath, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, simpleDBStatements)
+	client, dbPath, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][simpleDDLStatements])
 	defer cleanup()
 
 	if err = populate(ctx, client); err != nil {
@@ -2546,7 +2605,6 @@ func TestIntegration_BatchRead(t *testing.T) {
 
 // Test normal txReadEnv method on BatchReadOnlyTransaction.
 func TestIntegration_BROTNormal(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	// Set up testing environment and create txn.
@@ -2558,7 +2616,7 @@ func TestIntegration_BROTNormal(t *testing.T) {
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, simpleDBStatements)
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][simpleDDLStatements])
 	defer cleanup()
 
 	if txn, err = client.BatchReadOnlyTransaction(ctx, StrongRead()); err != nil {
@@ -2654,12 +2712,11 @@ func TestIntegration_CommitTimestamp(t *testing.T) {
 }
 
 func TestIntegration_DML(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, singerDBStatements)
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][singerDDLStatements])
 	defer cleanup()
 
 	// Function that reads a single row's first name from within a transaction.
@@ -2698,10 +2755,29 @@ func TestIntegration_DML(t *testing.T) {
 		return got
 	}
 
+	singersQuery := [7]string{`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (1, "Umm", "Kulthum")`,
+		`Insert INTO Singers (SingerId, FirstName, LastName) VALUES (2, "Eduard", "Khil")`,
+		`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (3, "Audra", "McDonald")`,
+		`UPDATE Singers SET FirstName = "Oum" WHERE SingerId = 1`,
+		`UPDATE Singers SET FirstName = "Eddie" WHERE SingerId = 2`,
+		`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (3, "Audra", "McDonald")`,
+		`SELECT FirstName from Singers`,
+	}
+
+	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
+		singersQuery = [7]string{`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (1, 'Umm', 'Kulthum')`,
+			`Insert INTO Singers (SingerId, FirstName, LastName) VALUES (2, 'Eduard', 'Khil')`,
+			`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (3, 'Audra', 'McDonald')`,
+			`UPDATE Singers SET FirstName = 'Oum' WHERE SingerId = 1`,
+			`UPDATE Singers SET FirstName = 'Eddie' WHERE SingerId = 2`,
+			`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (3, 'Audra', 'McDonald')`,
+			`SELECT FirstName from Singers`,
+		}
+	}
 	// Use ReadWriteTransaction.Query to execute a DML statement.
 	_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *ReadWriteTransaction) error {
 		iter := tx.Query(ctx, Statement{
-			SQL: `INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (1, "Umm", "Kulthum")`,
+			SQL: singersQuery[0],
 		})
 		defer iter.Stop()
 		row, err := iter.Next()
@@ -2731,7 +2807,7 @@ func TestIntegration_DML(t *testing.T) {
 	// Use ReadWriteTransaction.Update to execute a DML statement.
 	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *ReadWriteTransaction) error {
 		count, err := tx.Update(ctx, Statement{
-			SQL: `Insert INTO Singers (SingerId, FirstName, LastName) VALUES (2, "Eduard", "Khil")`,
+			SQL: singersQuery[1],
 		})
 		if err != nil {
 			return err
@@ -2757,7 +2833,7 @@ func TestIntegration_DML(t *testing.T) {
 	var fail = errors.New("fail")
 	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *ReadWriteTransaction) error {
 		_, err := tx.Update(ctx, Statement{
-			SQL: `INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (3, "Audra", "McDonald")`,
+			SQL: singersQuery[2],
 		})
 		if err != nil {
 			return err
@@ -2771,14 +2847,13 @@ func TestIntegration_DML(t *testing.T) {
 	if got, want := ErrCode(err), codes.NotFound; got != want {
 		t.Errorf("got %s, want %s", got, want)
 	}
-
 	// Run two DML statements in the same transaction.
 	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *ReadWriteTransaction) error {
-		_, err := tx.Update(ctx, Statement{SQL: `UPDATE Singers SET FirstName = "Oum" WHERE SingerId = 1`})
+		_, err := tx.Update(ctx, Statement{SQL: singersQuery[3]})
 		if err != nil {
 			return err
 		}
-		_, err = tx.Update(ctx, Statement{SQL: `UPDATE Singers SET FirstName = "Eddie" WHERE SingerId = 2`})
+		_, err = tx.Update(ctx, Statement{SQL: singersQuery[4]})
 		if err != nil {
 			return err
 		}
@@ -2796,7 +2871,7 @@ func TestIntegration_DML(t *testing.T) {
 	// Run a DML statement and an ordinary mutation in the same transaction.
 	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *ReadWriteTransaction) error {
 		_, err := tx.Update(ctx, Statement{
-			SQL: `INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (3, "Audra", "McDonald")`,
+			SQL: singersQuery[5],
 		})
 		if err != nil {
 			return err
@@ -2817,7 +2892,7 @@ func TestIntegration_DML(t *testing.T) {
 
 	// Attempt to run a query using update.
 	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *ReadWriteTransaction) error {
-		_, err := tx.Update(ctx, Statement{SQL: `SELECT FirstName from Singers`})
+		_, err := tx.Update(ctx, Statement{SQL: singersQuery[6]})
 		return err
 	})
 	if got, want := ErrCode(err), codes.InvalidArgument; got != want {
@@ -2997,12 +3072,11 @@ func TestIntegration_StructParametersBind(t *testing.T) {
 }
 
 func TestIntegration_PDML(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, singerDBStatements)
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][singerDDLStatements])
 	defer cleanup()
 
 	columns := []string{"SingerId", "FirstName", "LastName"}
@@ -3021,12 +3095,17 @@ func TestIntegration_PDML(t *testing.T) {
 	if _, err := client.Apply(ctx, muts); err != nil {
 		t.Fatal(err)
 	}
+
+	query := `UPDATE Singers SET Singers.FirstName = "changed" WHERE Singers.SingerId >= 1 AND Singers.SingerId <= @p1`
+	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
+		query = `UPDATE Singers SET FirstName = 'changed' WHERE SingerId >= 1 AND SingerId <= $1`
+	}
 	// Identifiers in PDML statements must be fully qualified.
 	// TODO(jba): revisit the above.
 	count, err := client.PartitionedUpdate(ctx, Statement{
-		SQL: `UPDATE Singers SET Singers.FirstName = "changed" WHERE Singers.SingerId >= 1 AND Singers.SingerId <= @end`,
+		SQL: query,
 		Params: map[string]interface{}{
-			"end": 3,
+			"p1": 3,
 		},
 	})
 	if err != nil {
@@ -3052,12 +3131,11 @@ func TestIntegration_PDML(t *testing.T) {
 }
 
 func TestIntegration_BatchDML(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, singerDBStatements)
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][singerDDLStatements])
 	defer cleanup()
 
 	columns := []string{"SingerId", "FirstName", "LastName"}
@@ -3075,12 +3153,24 @@ func TestIntegration_BatchDML(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	singersQuery := [3]string{`UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`,
+		`UPDATE Singers SET Singers.FirstName = "changed 2" WHERE Singers.SingerId = 2`,
+		`UPDATE Singers SET Singers.FirstName = "changed 3" WHERE Singers.SingerId = 3`,
+	}
+
+	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
+		singersQuery = [3]string{`UPDATE Singers SET FirstName = 'changed 1' WHERE SingerId = 1`,
+			`UPDATE Singers SET FirstName = 'changed 2' WHERE SingerId = 2`,
+			`UPDATE Singers SET FirstName = 'changed 3' WHERE SingerId = 3`,
+		}
+	}
+
 	var counts []int64
 	_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *ReadWriteTransaction) (err error) {
 		counts, err = tx.BatchUpdate(ctx, []Statement{
-			{SQL: `UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`},
-			{SQL: `UPDATE Singers SET Singers.FirstName = "changed 2" WHERE Singers.SingerId = 2`},
-			{SQL: `UPDATE Singers SET Singers.FirstName = "changed 3" WHERE Singers.SingerId = 3`},
+			{SQL: singersQuery[0]},
+			{SQL: singersQuery[1]},
+			{SQL: singersQuery[2]},
 		})
 		return err
 	})
@@ -3106,12 +3196,11 @@ func TestIntegration_BatchDML(t *testing.T) {
 }
 
 func TestIntegration_BatchDML_NoStatements(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, singerDBStatements)
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][singerDDLStatements])
 	defer cleanup()
 
 	_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *ReadWriteTransaction) (err error) {
@@ -3131,12 +3220,11 @@ func TestIntegration_BatchDML_NoStatements(t *testing.T) {
 }
 
 func TestIntegration_BatchDML_TwoStatements(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, singerDBStatements)
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][singerDDLStatements])
 	defer cleanup()
 
 	columns := []string{"SingerId", "FirstName", "LastName"}
@@ -3154,19 +3242,31 @@ func TestIntegration_BatchDML_TwoStatements(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	singersQuery := [4]string{`UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`,
+		`UPDATE Singers SET Singers.FirstName = "changed 2" WHERE Singers.SingerId = 2`,
+		`UPDATE Singers SET Singers.FirstName = "changed 3" WHERE Singers.SingerId = 3`,
+		`UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`}
+
+	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
+		singersQuery = [4]string{`UPDATE Singers SET FirstName = 'changed 1' WHERE SingerId = 1`,
+			`UPDATE Singers SET FirstName = 'changed 2' WHERE SingerId = 2`,
+			`UPDATE Singers SET FirstName = 'changed 3' WHERE SingerId = 3`,
+			`UPDATE Singers SET FirstName = 'changed 1' WHERE SingerId = 1`}
+	}
+
 	var updateCount int64
 	var batchCounts []int64
 	_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *ReadWriteTransaction) (err error) {
 		batchCounts, err = tx.BatchUpdate(ctx, []Statement{
-			{SQL: `UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`},
-			{SQL: `UPDATE Singers SET Singers.FirstName = "changed 2" WHERE Singers.SingerId = 2`},
-			{SQL: `UPDATE Singers SET Singers.FirstName = "changed 3" WHERE Singers.SingerId = 3`},
+			{SQL: singersQuery[0]},
+			{SQL: singersQuery[1]},
+			{SQL: singersQuery[2]},
 		})
 		if err != nil {
 			return err
 		}
 
-		updateCount, err = tx.Update(ctx, Statement{SQL: `UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`})
+		updateCount, err = tx.Update(ctx, Statement{SQL: singersQuery[3]})
 		return err
 	})
 	if err != nil {
@@ -3181,12 +3281,11 @@ func TestIntegration_BatchDML_TwoStatements(t *testing.T) {
 }
 
 func TestIntegration_BatchDML_Error(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, singerDBStatements)
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][singerDDLStatements])
 	defer cleanup()
 
 	columns := []string{"SingerId", "FirstName", "LastName"}
@@ -3204,11 +3303,21 @@ func TestIntegration_BatchDML_Error(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	singersQuery := [3]string{`UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`,
+		`some illegal statement`,
+		`UPDATE Singers SET Singers.FirstName = "changed 3" WHERE Singers.SingerId = 3`}
+
+	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
+		singersQuery = [3]string{`UPDATE Singers SET FirstName = 'changed 1' WHERE SingerId = 1`,
+			`some illegal statement`,
+			`UPDATE Singers SET FirstName = 'changed 3' WHERE SingerId = 3`}
+	}
+
 	_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *ReadWriteTransaction) (err error) {
 		counts, err := tx.BatchUpdate(ctx, []Statement{
-			{SQL: `UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`},
-			{SQL: `some illegal statement`},
-			{SQL: `UPDATE Singers SET Singers.FirstName = "changed 3" WHERE Singers.SingerId = 3`},
+			{SQL: singersQuery[0]},
+			{SQL: singersQuery[1]},
+			{SQL: singersQuery[2]},
 		})
 		if err == nil {
 			t.Fatal("expected err, got nil")
@@ -3329,14 +3438,13 @@ func readPGSingerTable(iter *RowIterator) ([][]interface{}, error) {
 }
 
 func TestIntegration_StartBackupOperation(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	skipEmulatorTest(t)
 	t.Parallel()
 
 	// Backups can be slow, so use a 30 minute timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	_, testDatabaseName, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, backuDBStatements)
+	_, testDatabaseName, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][backupDDLStatements])
 	defer cleanup()
 
 	backupID := backupIDSpace.New()
@@ -3379,12 +3487,11 @@ func TestIntegration_StartBackupOperation(t *testing.T) {
 
 // TestIntegration_DirectPathFallback tests the CFE fallback when the directpath net is blackholed.
 func TestIntegration_DirectPathFallback(t *testing.T) {
-	skipUnsupportedPGTest(t)
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	// Set up testing environment.
-	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, readDBStatements)
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, statements[testDialect][readDDLStatements])
 	defer cleanup()
 
 	if !dpConfig.attemptDirectPath {
@@ -3458,7 +3565,7 @@ func prepareDBAndClient(ctx context.Context, t *testing.T, spc SessionPoolConfig
 	if _, err := op.Wait(ctx); err != nil {
 		t.Fatalf("cannot create testing DB %v: %v", dbPath, err)
 	}
-	if dbDialect == adminpb.DatabaseDialect_POSTGRESQL {
+	if dbDialect == adminpb.DatabaseDialect_POSTGRESQL && len(statements) > 0 {
 		op, err := databaseAdmin.UpdateDatabaseDdl(ctx, &adminpb.UpdateDatabaseDdlRequest{
 			Database:   dbPath,
 			Statements: statements,
