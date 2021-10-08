@@ -54,11 +54,11 @@ const (
 	directPathIPV6Prefix = "[2001:4860:8040"
 	directPathIPV4Prefix = "34.126"
 
-	singerDDLStatements = "SINGER_DDL_STATEMENTS"
-	simpleDDLStatements = "SIMPLE_DDL_STATEMENTS"
-	readDDLStatements   = "READ_DDL_STATEMENTS"
-	backupDDLStatements = "BACKUP_DDL_STATEMENTS"
-  testTableDDLStatements = "TEST_TABLE_DDL_STATEMENTS"
+	singerDDLStatements    = "SINGER_DDL_STATEMENTS"
+	simpleDDLStatements    = "SIMPLE_DDL_STATEMENTS"
+	readDDLStatements      = "READ_DDL_STATEMENTS"
+	backupDDLStatements    = "BACKUP_DDL_STATEMENTS"
+	testTableDDLStatements = "TEST_TABLE_DDL_STATEMENTS"
 )
 
 var (
@@ -249,18 +249,18 @@ var (
 
 	statements = map[adminpb.DatabaseDialect]map[string][]string{
 		adminpb.DatabaseDialect_GOOGLE_STANDARD_SQL: {
-			singerDDLStatements: singerDBStatements,
-			simpleDDLStatements: simpleDBStatements,
-			readDDLStatements:   readDBStatements,
-			backupDDLStatements: backupDBStatements,
-      testTableDDLStatements: readDBStatements,
+			singerDDLStatements:    singerDBStatements,
+			simpleDDLStatements:    simpleDBStatements,
+			readDDLStatements:      readDBStatements,
+			backupDDLStatements:    backupDBStatements,
+			testTableDDLStatements: readDBStatements,
 		},
 		adminpb.DatabaseDialect_POSTGRESQL: {
-			singerDDLStatements: singerDBPGStatements,
-			simpleDDLStatements: simpleDBPGStatements,
-			readDDLStatements:   readDBPGStatements,
-			backupDDLStatements: backupDBPGStatements,
-      testTableDDLStatements: readDBSPGtatements,
+			singerDDLStatements:    singerDBPGStatements,
+			simpleDDLStatements:    simpleDBPGStatements,
+			readDDLStatements:      readDBPGStatements,
+			backupDDLStatements:    backupDBPGStatements,
+			testTableDDLStatements: readDBSPGtatements,
 		},
 	}
 
@@ -2810,22 +2810,22 @@ func TestIntegration_DML(t *testing.T) {
 	}
 
 	singersQuery := [7]string{`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (1, "Umm", "Kulthum")`,
-		`Insert INTO Singers (SingerId, FirstName, LastName) VALUES (2, "Eduard", "Khil")`,
+		`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (2, "Eduard", "Khil")`,
 		`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (3, "Audra", "McDonald")`,
 		`UPDATE Singers SET FirstName = "Oum" WHERE SingerId = 1`,
 		`UPDATE Singers SET FirstName = "Eddie" WHERE SingerId = 2`,
 		`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (3, "Audra", "McDonald")`,
-		`SELECT FirstName from Singers`,
+		`SELECT FirstName FROM Singers`,
 	}
 
 	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
 		singersQuery = [7]string{`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (1, 'Umm', 'Kulthum')`,
-			`Insert INTO Singers (SingerId, FirstName, LastName) VALUES (2, 'Eduard', 'Khil')`,
+			`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (2, 'Eduard', 'Khil')`,
 			`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (3, 'Audra', 'McDonald')`,
 			`UPDATE Singers SET FirstName = 'Oum' WHERE SingerId = 1`,
 			`UPDATE Singers SET FirstName = 'Eddie' WHERE SingerId = 2`,
 			`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (3, 'Audra', 'McDonald')`,
-			`SELECT FirstName from Singers`,
+			`SELECT FirstName FROM Singers`,
 		}
 	}
 	// Use ReadWriteTransaction.Query to execute a DML statement.
