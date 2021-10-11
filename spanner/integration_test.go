@@ -2809,7 +2809,7 @@ func TestIntegration_DML(t *testing.T) {
 		return got
 	}
 
-	singersQuery := [7]string{`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (1, "Umm", "Kulthum")`,
+	singersQuery := []string{`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (1, "Umm", "Kulthum")`,
 		`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (2, "Eduard", "Khil")`,
 		`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (3, "Audra", "McDonald")`,
 		`UPDATE Singers SET FirstName = "Oum" WHERE SingerId = 1`,
@@ -2819,7 +2819,7 @@ func TestIntegration_DML(t *testing.T) {
 	}
 
 	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
-		singersQuery = [7]string{`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (1, 'Umm', 'Kulthum')`,
+		singersQuery = []string{`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (1, 'Umm', 'Kulthum')`,
 			`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (2, 'Eduard', 'Khil')`,
 			`INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (3, 'Audra', 'McDonald')`,
 			`UPDATE Singers SET FirstName = 'Oum' WHERE SingerId = 1`,
@@ -3207,13 +3207,13 @@ func TestIntegration_BatchDML(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	singersQuery := [3]string{`UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`,
+	singersQuery := []string{`UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`,
 		`UPDATE Singers SET Singers.FirstName = "changed 2" WHERE Singers.SingerId = 2`,
 		`UPDATE Singers SET Singers.FirstName = "changed 3" WHERE Singers.SingerId = 3`,
 	}
 
 	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
-		singersQuery = [3]string{`UPDATE Singers SET FirstName = 'changed 1' WHERE SingerId = 1`,
+		singersQuery = []string{`UPDATE Singers SET FirstName = 'changed 1' WHERE SingerId = 1`,
 			`UPDATE Singers SET FirstName = 'changed 2' WHERE SingerId = 2`,
 			`UPDATE Singers SET FirstName = 'changed 3' WHERE SingerId = 3`,
 		}
@@ -3296,13 +3296,13 @@ func TestIntegration_BatchDML_TwoStatements(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	singersQuery := [4]string{`UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`,
+	singersQuery := []string{`UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`,
 		`UPDATE Singers SET Singers.FirstName = "changed 2" WHERE Singers.SingerId = 2`,
 		`UPDATE Singers SET Singers.FirstName = "changed 3" WHERE Singers.SingerId = 3`,
 		`UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`}
 
 	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
-		singersQuery = [4]string{`UPDATE Singers SET FirstName = 'changed 1' WHERE SingerId = 1`,
+		singersQuery = []string{`UPDATE Singers SET FirstName = 'changed 1' WHERE SingerId = 1`,
 			`UPDATE Singers SET FirstName = 'changed 2' WHERE SingerId = 2`,
 			`UPDATE Singers SET FirstName = 'changed 3' WHERE SingerId = 3`,
 			`UPDATE Singers SET FirstName = 'changed 1' WHERE SingerId = 1`}
@@ -3357,12 +3357,12 @@ func TestIntegration_BatchDML_Error(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	singersQuery := [3]string{`UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`,
+	singersQuery := []string{`UPDATE Singers SET Singers.FirstName = "changed 1" WHERE Singers.SingerId = 1`,
 		`some illegal statement`,
 		`UPDATE Singers SET Singers.FirstName = "changed 3" WHERE Singers.SingerId = 3`}
 
 	if testDialect == adminpb.DatabaseDialect_POSTGRESQL {
-		singersQuery = [3]string{`UPDATE Singers SET FirstName = 'changed 1' WHERE SingerId = 1`,
+		singersQuery = []string{`UPDATE Singers SET FirstName = 'changed 1' WHERE SingerId = 1`,
 			`some illegal statement`,
 			`UPDATE Singers SET FirstName = 'changed 3' WHERE SingerId = 3`}
 	}
