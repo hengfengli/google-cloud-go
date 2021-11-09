@@ -260,7 +260,7 @@ var (
 			simpleDDLStatements:    simpleDBPGStatements,
 			readDDLStatements:      readDBPGStatements,
 			backupDDLStatements:    backupDBPGStatements,
-			testTableDDLStatements: readDBSPGtatements,
+			testTableDDLStatements: readDBPGStatements,
 		},
 	}
 
