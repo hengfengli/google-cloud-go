@@ -25,6 +25,9 @@ import (
 	"google.golang.org/api/option"
 )
 
+// pgDmlWithParameters shows how to execute a DML statement with parameters
+// on a Spanner PostgreSQL database. The PostgreSQL dialect uses positional
+// parameters, as opposed to the named parameters that are used by Cloud Spanner.
 func pgDmlWithParameters(w io.Writer, db string) error {
 	ctx := context.Background()
 	// TODO: Remove endpoint

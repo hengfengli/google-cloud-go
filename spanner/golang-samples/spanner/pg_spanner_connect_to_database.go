@@ -24,7 +24,9 @@ import (
 	database "cloud.google.com/go/spanner/admin/database/apiv1"
 )
 
-func createPgClients(w io.Writer, db string) error {
+// pgCreateClients shows how to create a database and admin client for a Spanner
+// PostgreSQL database.
+func pgCreateClients(w io.Writer, db string) error {
 	ctx := context.Background()
 
 	adminClient, err := database.NewDatabaseAdminClient(ctx)

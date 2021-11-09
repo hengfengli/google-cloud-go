@@ -25,6 +25,8 @@ import (
 	"google.golang.org/api/option"
 )
 
+// pgPartitionedDml shows how to execute Partitioned DML on a Spanner PostgreSQL database.
+// See also https://cloud.google.com/spanner/docs/dml-partitioned.
 func pgPartitionedDml(w io.Writer, db string) error {
 	ctx := context.Background()
 	// TODO: Remove endpoint

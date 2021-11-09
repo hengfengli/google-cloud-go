@@ -26,6 +26,8 @@ import (
 	adminpb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 )
 
+// pgCreateDatabase shows how to create a Spanner database that uses the
+// PostgreSQL dialect.
 func pgCreateDatabase(ctx context.Context, w io.Writer, db string) error {
 	matches := regexp.MustCompile("^(.*)/databases/(.*)$").FindStringSubmatch(db)
 	if matches == nil || len(matches) != 3 {

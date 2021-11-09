@@ -26,6 +26,9 @@ import (
 	"google.golang.org/api/option"
 )
 
+// pgQueryParameter shows how to execute a query with parameters on a Spanner
+// PostgreSQL database. The PostgreSQL dialect uses positional parameters, as
+// opposed to the named parameters of Cloud Spanner.
 func pgQueryParameter(w io.Writer, db string) error {
 	ctx := context.Background()
 	// TODO: Remove endpoint

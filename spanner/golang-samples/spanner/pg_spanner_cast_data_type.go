@@ -27,6 +27,8 @@ import (
 	"google.golang.org/api/option"
 )
 
+// pgCastDataType shows how to cast values from one data type to another in a
+// Spanner PostgreSQL SQL statement.
 func pgCastDataType(w io.Writer, db string) error {
 	ctx := context.Background()
 	// TODO: Remove endpoint

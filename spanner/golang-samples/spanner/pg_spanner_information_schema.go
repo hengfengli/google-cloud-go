@@ -28,6 +28,8 @@ import (
 	adminpb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 )
 
+// pgInformationSchema shows how to query the information schema metadata in a
+// Spanner PostgreSQL database.
 func pgInformationSchema(w io.Writer, db string) error {
 	ctx := context.Background()
 

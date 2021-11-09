@@ -28,6 +28,8 @@ import (
 	adminpb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 )
 
+// pgCaseSensitivity shows the rules for case-sensitivity and case folding for
+// a Spanner PostgreSQL database.
 func pgCaseSensitivity(w io.Writer, db string) error {
 	ctx := context.Background()
 

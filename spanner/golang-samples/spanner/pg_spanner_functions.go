@@ -27,6 +27,7 @@ import (
 	"google.golang.org/api/option"
 )
 
+// pgFunctions shows how to call a server side function on a Spanner PostgreSQL database.
 func pgFunctions(w io.Writer, db string) error {
 	ctx := context.Background()
 	// TODO: Remove endpoint

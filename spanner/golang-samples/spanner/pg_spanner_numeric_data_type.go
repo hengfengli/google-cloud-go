@@ -28,6 +28,8 @@ import (
 	adminpb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 )
 
+// pgNumericDataType shows how to work with the PostgreSQL NUMERIC/DECIMAL data
+// type on a Spanner PostgreSQL database.
 func pgNumericDataType(w io.Writer, db string) error {
 	ctx := context.Background()
 

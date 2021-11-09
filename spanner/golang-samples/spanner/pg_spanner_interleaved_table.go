@@ -26,6 +26,9 @@ import (
 	adminpb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 )
 
+// pgInterleavedTable shows how to create an interleaved table on a Spanner
+// PostgreSQL database. The Spanner PostgreSQL dialect extends the standard
+// PostgreSQL dialect to allow the creation of interleaved tables.
 func pgInterleavedTable(w io.Writer, db string) error {
 	ctx := context.Background()
 

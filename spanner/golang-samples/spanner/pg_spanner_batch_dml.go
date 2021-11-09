@@ -25,6 +25,7 @@ import (
 	"google.golang.org/api/option"
 )
 
+// pgBatchDml shows how to execute a batch of DML statements on a Spanner PostgreSQL database.
 func pgBatchDml(w io.Writer, db string) error {
 	ctx := context.Background()
 	// TODO: Remove endpoint

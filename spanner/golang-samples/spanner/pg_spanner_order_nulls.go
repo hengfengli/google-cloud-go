@@ -28,6 +28,9 @@ import (
 	adminpb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 )
 
+// pgOrderNulls shows how a Spanner PostgreSQL database orders null values in a
+// query, and how an application can change the default behavior by adding
+// `NULLS FIRST` or `NULLS LAST` to an `ORDER BY` clause.
 func pgOrderNulls(w io.Writer, db string) error {
 	ctx := context.Background()
 
