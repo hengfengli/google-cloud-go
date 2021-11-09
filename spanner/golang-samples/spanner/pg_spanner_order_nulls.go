@@ -32,6 +32,7 @@ import (
 // query, and how an application can change the default behavior by adding
 // `NULLS FIRST` or `NULLS LAST` to an `ORDER BY` clause.
 func pgOrderNulls(w io.Writer, db string) error {
+	// db := "projects/my-project/instances/my-instance/databases/my-database"
 	ctx := context.Background()
 
 	// TODO: Remove endpoint

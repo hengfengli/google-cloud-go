@@ -29,6 +29,7 @@ import (
 // pgCreateDatabase shows how to create a Spanner database that uses the
 // PostgreSQL dialect.
 func pgCreateDatabase(ctx context.Context, w io.Writer, db string) error {
+	// db := "projects/my-project/instances/my-instance/databases/my-database"
 	matches := regexp.MustCompile("^(.*)/databases/(.*)$").FindStringSubmatch(db)
 	if matches == nil || len(matches) != 3 {
 		return fmt.Errorf("Invalid database id %s", db)

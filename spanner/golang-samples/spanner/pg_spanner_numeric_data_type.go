@@ -31,6 +31,7 @@ import (
 // pgNumericDataType shows how to work with the PostgreSQL NUMERIC/DECIMAL data
 // type on a Spanner PostgreSQL database.
 func pgNumericDataType(w io.Writer, db string) error {
+	// db := "projects/my-project/instances/my-instance/databases/my-database"
 	ctx := context.Background()
 
 	// TODO: Remove endpoint

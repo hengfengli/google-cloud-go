@@ -31,6 +31,7 @@ import (
 // pgInformationSchema shows how to query the information schema metadata in a
 // Spanner PostgreSQL database.
 func pgInformationSchema(w io.Writer, db string) error {
+	// db := "projects/my-project/instances/my-instance/databases/my-database"
 	ctx := context.Background()
 
 	// TODO: Remove endpoint

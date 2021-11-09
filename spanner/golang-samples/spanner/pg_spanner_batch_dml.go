@@ -27,6 +27,7 @@ import (
 
 // pgBatchDml shows how to execute a batch of DML statements on a Spanner PostgreSQL database.
 func pgBatchDml(w io.Writer, db string) error {
+	// db := "projects/my-project/instances/my-instance/databases/my-database"
 	ctx := context.Background()
 	// TODO: Remove endpoint
 	client, err := spanner.NewClient(ctx, db, option.WithEndpoint("staging-wrenchworks.sandbox.googleapis.com:443"))

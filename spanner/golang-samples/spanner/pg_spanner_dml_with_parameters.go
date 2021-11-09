@@ -29,6 +29,7 @@ import (
 // on a Spanner PostgreSQL database. The PostgreSQL dialect uses positional
 // parameters, as opposed to the named parameters that are used by Cloud Spanner.
 func pgDmlWithParameters(w io.Writer, db string) error {
+	// db := "projects/my-project/instances/my-instance/databases/my-database"
 	ctx := context.Background()
 	// TODO: Remove endpoint
 	client, err := spanner.NewClient(ctx, db, option.WithEndpoint("staging-wrenchworks.sandbox.googleapis.com:443"))

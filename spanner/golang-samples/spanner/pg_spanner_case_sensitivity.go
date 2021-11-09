@@ -31,6 +31,7 @@ import (
 // pgCaseSensitivity shows the rules for case-sensitivity and case folding for
 // a Spanner PostgreSQL database.
 func pgCaseSensitivity(w io.Writer, db string) error {
+	// db := "projects/my-project/instances/my-instance/databases/my-database"
 	ctx := context.Background()
 
 	// TODO: Remove endpoint

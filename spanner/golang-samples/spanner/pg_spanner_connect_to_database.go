@@ -27,6 +27,7 @@ import (
 // pgCreateClients shows how to create a database and admin client for a Spanner
 // PostgreSQL database.
 func pgCreateClients(w io.Writer, db string) error {
+	// db := "projects/my-project/instances/my-instance/databases/my-database"
 	ctx := context.Background()
 
 	adminClient, err := database.NewDatabaseAdminClient(ctx)

@@ -28,6 +28,7 @@ import (
 // pgPartitionedDml shows how to execute Partitioned DML on a Spanner PostgreSQL database.
 // See also https://cloud.google.com/spanner/docs/dml-partitioned.
 func pgPartitionedDml(w io.Writer, db string) error {
+	// db := "projects/my-project/instances/my-instance/databases/my-database"
 	ctx := context.Background()
 	// TODO: Remove endpoint
 	client, err := spanner.NewClient(ctx, db, option.WithEndpoint("staging-wrenchworks.sandbox.googleapis.com:443"))
